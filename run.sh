@@ -2,4 +2,4 @@
 
 PROTOCOL=2
 
-python FTP/Client/client.py "$@"
+python -m FTP.Client.client "$@"
