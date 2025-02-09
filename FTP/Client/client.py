@@ -241,7 +241,7 @@ class FTPClient:
 # FTP Client CLI#
 #---------------#
 def main():
-    parser = argparse.ArgumentParser(description="Cliente FTP")
+    parser = argparse.ArgumentParser(description="Cliente FTP", add_help=False)
     parser.add_argument("-h", "--host", required=True, help="Dirección del servidor FTP")
     parser.add_argument("-p", "--port", type=int, default=21, help="Puerto del servidor")
     parser.add_argument("-u", "--user", required=True, help="Nombre de usuario")
@@ -249,7 +249,7 @@ def main():
     parser.add_argument("-c", "--command", required=True, help="Comando FTP a ejecutar")
     parser.add_argument("-a", "--arg1", help="Primer argumento del comando")
     parser.add_argument("-b", "--arg2", help="Segundo argumento del comando")
-
+    parser.add_argument("--help", action="help", default=argparse.SUPPRESS, help="Mostrar este mensaje de ayuda")
     args = parser.parse_args()
 
     client = FTPClient(host=args.host, port=args.port)
