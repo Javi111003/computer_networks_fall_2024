@@ -1,5 +1,6 @@
 import socket
 import re
+import argparse
 import logging
 from typing import Optional, Dict, Callable
 from FTP.Common.constants import FTPResponseCode, TransferMode, DEFAULT_BUFFER_SIZE, DEFAULT_TIMEOUT
@@ -22,6 +23,13 @@ class FTPClient:
             "STOR": self.upload_file,
             "PASV": self.enter_passive_mode,
             "PORT": self.enter_active_mode,
+            "PWD": self.get_current_dir,
+            "CWD": self.change_dir,
+            "MKD": self.make_dir,
+            "RMD": self.remove_dir,
+            "DELE": self.delete_file,
+            "RNFR": self.rename_from,
+            "RNTO": self.rename_to,
             "QUIT": self.quit
         }
 
@@ -62,6 +70,62 @@ class FTPClient:
         if FTPResponseCode.USER_LOGGED_IN != self._parse_code(response):
             raise FTPAuthError(self._parse_code(response), "Contraseña inválida")
         return response
+
+    def get_current_dir(self) -> str:
+        """Obtiene el directorio actual (PWD)"""
+        response = self.send_command("PWD")
+        if self._parse_code(response) != FTPResponseCode.PATHNAME_CREATED:
+            raise FTPClientError(self._parse_code(response), "Error obteniendo directorio")
+        return re.search(r'"(.*)"', response).group(1)
+
+    def change_dir(self, path: str) -> str:
+        """Cambia de directorio (CWD)"""
+        response = self.send_command("CWD", path)
+        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+            raise FTPClientError(self._parse_code(response), "Error cambiando directorio")
+        return response
+
+    def make_dir(self, path: str) -> str:
+        """Crea un directorio (MKD)"""
+        response = self.send_command("MKD", path)
+        if self._parse_code(response) != FTPResponseCode.PATHNAME_CREATED:
+            raise FTPClientError(self._parse_code(response), "Error creando directorio")
+        return response
+
+    def remove_dir(self, path: str) -> str:
+        """Elimina un directorio (RMD)"""
+        response = self.send_command("RMD", path)
+        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+            raise FTPClientError(self._parse_code(response), "Error eliminando directorio")
+        return response
+
+    def delete_file(self, filename: str) -> str:
+        """Elimina un archivo (DELE)"""
+        response = self.send_command("DELE", filename)
+        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+            raise FTPClientError(self._parse_code(response), "Error eliminando archivo")
+        return response
+
+    def rename_from(self, old_name: str):
+        """Prepara renombrado (RNFR)"""
+        response = self.send_command("RNFR", old_name)
+        if self._parse_code(response) != 350:
+            raise FTPClientError(self._parse_code(response), "RNFR fallido")
+        self.rename_from_name = old_name
+
+    def rename_to(self, new_name: str):
+        """Completa renombrado (RNTO)"""
+        if not self.rename_from_name:
+            raise FTPClientError(503, "Secuencia RNFR/RNTO incorrecta")
+        response = self.send_command("RNTO", new_name)
+        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+            raise FTPClientError(self._parse_code(response), "RNTO fallido")
+        self.rename_from_name = ""
+
+    def rename_file(self, old_name: str, new_name: str):
+        """Maneja la secuencia completa RNFR/RNTO"""
+        self.rename_from(old_name)
+        self.rename_to(new_name)
 
     def download_file(self, remote_path: str, local_path: str) -> str:
         """Descarga un archivo usando RETR."""
@@ -116,8 +180,11 @@ class FTPClient:
             pass
 
     def _parse_code(self, response: str) -> int:
-        """Extrae el código numérico de la respuesta."""
-        return int(response.split()[0]) if response else 0
+        """Parses the response code from the server."""
+        if not response:
+            return 0
+        lines = response.split("\r\n")
+        return int(lines[-1].split()[0]) if lines else 0
 
     def _parse_pasv_response(self, response: str) -> tuple[str, int]:
         """Parsea respuesta PASV (ej: 227 Entering Passive Mode (192,168,1,2,123,45))."""
@@ -169,3 +236,43 @@ class FTPClient:
             if "\r\n" in chunk:
                 break
         return "".join(response).strip()
+
+#---------------#
+# FTP Client CLI#
+#---------------#
+def main():
+    parser = argparse.ArgumentParser(description="Cliente FTP")
+    parser.add_argument("-h", "--host", required=True, help="Dirección del servidor FTP")
+    parser.add_argument("-p", "--port", type=int, default=21, help="Puerto del servidor")
+    parser.add_argument("-u", "--user", required=True, help="Nombre de usuario")
+    parser.add_argument("-w", "--password", required=True, help="Contraseña")
+    parser.add_argument("-c", "--command", required=True, help="Comando FTP a ejecutar")
+    parser.add_argument("-a", "--arg1", help="Primer argumento del comando")
+    parser.add_argument("-b", "--arg2", help="Segundo argumento del comando")
+
+    args = parser.parse_args()
+
+    client = FTPClient(host=args.host, port=args.port)
+    try:
+        # Conexión y autenticación
+        client.connect()
+        client.execute("USER", args.user)
+        client.execute("PASS", args.password)
+
+        # Ejecutar comando
+        if args.command.upper() in ["RETR", "STOR"]:
+            client.execute(args.command, args.arg1, args.arg2)
+        elif args.command.upper() in ["RNFR", "RNTO"]:
+            client.rename_file(args.arg1, args.arg2)
+        else:
+            response = client.execute(args.command, args.arg1 or "")
+            print(response)
+
+    except FTPClientError as e:
+        print(f"Error: {e}")
+    finally:
+        client.execute("QUIT")
+
+
+if __name__ == "__main__":
+    main()
