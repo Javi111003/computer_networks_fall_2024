@@ -52,6 +52,7 @@ class FTPClient:
 
     def execute(self, command: str, *args) -> str:
         """Ejecuta un comando usando el dispatcher o envío genérico."""
+        args = tuple(arg for arg in args if arg != "")
         cmd = command.upper()
         if cmd in self.command_dispatcher:
             return self.command_dispatcher[cmd](*args)
@@ -127,27 +128,44 @@ class FTPClient:
         self.rename_from(old_name)
         self.rename_to(new_name)
 
-    def download_file(self, remote_path: str, local_path: str) -> str:
+    def download_file(self, remote_path: str, local_path: str = None) -> str:
         """Descarga un archivo usando RETR."""
+        # Si no se especifica el archivo local, se utiliza el mismo nombre
+        if local_path is None:
+            local_path = remote_path
+
         self._setup_data_connection()
 
+        # Enviar comando RETR
         response = self.send_command("RETR", remote_path)
-        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+        # Aceptamos como válidos los códigos preliminares 125 o 150
+        if self._parse_code(response) not in (125, 150):
             raise FTPTransferError(self._parse_code(response), "Error en RETR")
 
+        # Recibir el archivo y guardarlo en local
         self._receive_data(local_path)
-        return self._get_response()
+
+        # Leer la respuesta final del servidor (por ejemplo, 226)
+        final_response = self._get_response()
+        if self._parse_code(final_response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+            raise FTPTransferError(self._parse_code(final_response), "Error en RETR final")
+
+        return final_response
 
     def upload_file(self, local_path: str, remote_path: str) -> str:
         """Sube un archivo usando STOR."""
         self._setup_data_connection()
 
         response = self.send_command("STOR", remote_path)
-        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+        if self._parse_code(response) not in (125, 150):
             raise FTPTransferError(self._parse_code(response), "Error en STOR")
 
         self._send_data(local_path)
-        return self._get_response()
+        final_response = self._get_response()
+        if self._parse_code(final_response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+            raise FTPTransferError(self._parse_code(final_response), "Error en STOR final")
+
+        return final_response
 
     def enter_passive_mode(self) -> str:
         """Activa modo PASV y configura conexión de datos."""
@@ -167,7 +185,8 @@ class FTPClient:
     def quit(self) -> str:
         """Cierra la conexión."""
         response = self.send_command("QUIT")
-        self.control_sock.close()
+        if self.control_sock:
+            self.control_sock.close()
         self._close_data_connection()
         return response
 
@@ -246,7 +265,7 @@ def main():
     parser.add_argument("-p", "--port", type=int, default=21, help="Puerto del servidor")
     parser.add_argument("-u", "--user", required=True, help="Nombre de usuario")
     parser.add_argument("-w", "--password", required=True, help="Contraseña")
-    parser.add_argument("-c", "--command", required=True, help="Comando FTP a ejecutar")
+    parser.add_argument("-c", "--command", required=False, help="Comando FTP a ejecutar")
     parser.add_argument("-a", "--arg1", help="Primer argumento del comando")
     parser.add_argument("-b", "--arg2", help="Segundo argumento del comando")
     parser.add_argument("--help", action="help", default=argparse.SUPPRESS, help="Mostrar este mensaje de ayuda")
@@ -259,19 +278,20 @@ def main():
         client.execute("USER", args.user)
         client.execute("PASS", args.password)
 
-        # Ejecutar comando
-        if args.command.upper() in ["RETR", "STOR"]:
-            client.execute(args.command, args.arg1, args.arg2)
-        elif args.command.upper() in ["RNFR", "RNTO"]:
-            client.rename_file(args.arg1, args.arg2)
-        else:
-            response = client.execute(args.command, args.arg1 or "")
-            print(response)
+        if args.command:
+            if args.command.upper() in ["RETR", "STOR"]:
+                client.execute(args.command, args.arg1, args.arg2)
+            elif args.command.upper() in ["RNFR", "RNTO"]:
+                client.rename_file(args.arg1, args.arg2)
+            else:
+                response = client.execute(args.command, args.arg1 or "")
+                print(response)
 
     except FTPClientError as e:
         print(f"Error: {e}")
     finally:
-        client.execute("QUIT")
+        if args.command and args.command.upper() != "QUIT":
+            client.execute("QUIT")
 
 
 if __name__ == "__main__":
