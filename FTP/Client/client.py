@@ -292,7 +292,7 @@ def main():
                 response = client.execute(args.command, args.arg1 or "")
                 print(response)
         else:
-            print(user_response + "\n" + pass_response)
+            print(pass_response)
 
     except FTPClientError as e:
         print(f"Error: {e}")
