@@ -5,7 +5,7 @@ import logging
 from typing import Optional, Dict, Callable
 from FTP.Common.constants import FTPResponseCode, TransferMode, DEFAULT_BUFFER_SIZE, DEFAULT_TIMEOUT
 from FTP.Common.exceptions import FTPClientError, FTPTransferError, FTPAuthError, FTPConnectionError
-from FTP.Common.utils import (validate_transfer_type, validate_transfer_mode, 
+from FTP.Common.utils import (validate_transfer_type, validate_transfer_mode,
                             validate_structure, parse_allocation_size, validate_port_args,
                             parse_restart_marker, validate_path,
                             parse_features_response, parse_list_response)
