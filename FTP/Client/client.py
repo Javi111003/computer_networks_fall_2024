@@ -277,7 +277,7 @@ def main():
     client = FTPClient(host=args.host, port=args.port)
     try:
         # Conexión y autenticación
-        client.connect()
+        connection_response = client.connect()
         user_response = client.execute("USER", args.user)
         pass_response = client.execute("PASS", args.password)
 
@@ -292,7 +292,7 @@ def main():
                 response = client.execute(args.command, args.arg1 or "")
                 print(response)
         else:
-            print(user_response + "\n" + pass_response)
+            print(connection_response + "\n" + user_response + "\n" + pass_response)
 
     except FTPClientError as e:
         print(f"Error: {e}")
