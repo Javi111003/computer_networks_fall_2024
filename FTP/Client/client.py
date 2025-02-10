@@ -61,7 +61,7 @@ class FTPClient:
     def _handle_user(self, username: str) -> str:
         """Maneja el comando USER (inicio de autenticación)."""
         response = self.send_command("USER", username)
-        if FTPResponseCode.PASSWORD_REQUIRED != self._parse_code(response):
+        if self._parse_code(response) not in (FTPResponseCode.PASSWORD_REQUIRED, FTPResponseCode.USER_LOGGED_IN):
             raise FTPAuthError(self._parse_code(response), "Usuario inválido")
         return response
 
@@ -113,20 +113,23 @@ class FTPClient:
         if self._parse_code(response) != 350:
             raise FTPClientError(self._parse_code(response), "RNFR fallido")
         #self.rename_from_name = old_name
+        return response
 
     def rename_to(self, new_name: str):
         """Completa renombrado (RNTO)"""
         #if not self.rename_from_name:
         #    raise FTPClientError(503, "Secuencia RNFR/RNTO incorrecta")
         response = self.send_command("RNTO", new_name)
-        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+        if self._parse_code(response) not in (FTPResponseCode.FILE_ACTION_COMPLETED, 250):
             raise FTPClientError(self._parse_code(response), "RNTO fallido")
         #self.rename_from_name = ""
+        return response
 
     def rename_file(self, old_name: str, new_name: str):
         """Maneja la secuencia completa RNFR/RNTO"""
-        self.rename_from(old_name)
-        self.rename_to(new_name)
+        response_from = self.rename_from(old_name)
+        response_to = self.rename_to(new_name)
+        return response_from + "\n" + response_to
 
     def download_file(self, remote_path: str, local_path: str = None) -> str:
         """Descarga un archivo usando RETR."""
@@ -280,9 +283,11 @@ def main():
 
         if args.command:
             if args.command.upper() in ["RETR", "STOR"]:
-                client.execute(args.command, args.arg1, args.arg2)
+                response = client.execute(args.command, args.arg1, args.arg2)
+                print(response)
             elif args.command.upper() in ["RNFR", "RNTO"]:
-                client.rename_file(args.arg1, args.arg2)
+                response = client.rename_file(args.arg1, args.arg2)
+                print(response)
             else:
                 response = client.execute(args.command, args.arg1 or "")
                 print(response)
