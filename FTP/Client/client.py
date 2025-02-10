@@ -77,7 +77,7 @@ class FTPClient:
         response = self.send_command("PWD")
         if self._parse_code(response) != FTPResponseCode.PATHNAME_CREATED:
             raise FTPClientError(self._parse_code(response), "Error obteniendo directorio")
-        return re.search(r'"(.*)"', response).group(1)
+        return response
 
     def change_dir(self, path: str) -> str:
         """Cambia de directorio (CWD)"""
@@ -278,8 +278,8 @@ def main():
     try:
         # Conexión y autenticación
         client.connect()
-        client.execute("USER", args.user)
-        client.execute("PASS", args.password)
+        user_response = client.execute("USER", args.user)
+        pass_response = client.execute("PASS", args.password)
 
         if args.command:
             if args.command.upper() in ["RETR", "STOR"]:
@@ -291,6 +291,8 @@ def main():
             else:
                 response = client.execute(args.command, args.arg1 or "")
                 print(response)
+        else:
+            print(user_response + "\n" + pass_response)
 
     except FTPClientError as e:
         print(f"Error: {e}")
