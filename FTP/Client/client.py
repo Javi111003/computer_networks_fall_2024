@@ -5,6 +5,9 @@ import logging
 from typing import Optional, Dict, Callable
 from FTP.Common.constants import FTPResponseCode, TransferMode, DEFAULT_BUFFER_SIZE, DEFAULT_TIMEOUT
 from FTP.Common.exceptions import FTPClientError, FTPTransferError, FTPAuthError, FTPConnectionError
+from FTP.Common.utils import (validate_transfer_type, validate_transfer_mode, 
+                            validate_structure, parse_allocation_size, 
+                            parse_restart_marker)
 
 class FTPClient:
     """Cliente FTP con soporte para modos activo/pasivo y dispatcher de comandos."""
@@ -32,6 +35,28 @@ class FTPClient:
             "RNTO": self.rename_to,
             "QUIT": self.quit
         }
+        self.structure = 'F'  # Default structure
+        self.transfer_type = 'A'  # Default ASCII
+        self.transfer_mode = 'S'  # Default Stream
+        self.restart_point = None
+        
+        # Agregar nuevos comandos al dispatcher
+        self.command_dispatcher.update({
+            "TYPE": self.set_type,
+            "MODE": self.set_mode,
+            "STRU": self.set_structure,
+            "ACCT": self.handle_account,
+            "REIN": self.reinitialize,
+            "SYST": self.get_system,
+            "STAT": self.get_status,
+            "REST": self.set_restart_point,
+            "ALLO": self.allocate,
+            "STOU": self.store_unique,
+            "HELP": self.get_help,
+            "NOOP": self.noop,
+            "ABOR": self.abort,
+            "CDUP": self.change_to_parent_dir,
+        })
 
     def connect(self) -> str:
         """Establece conexión inicial con el servidor."""
@@ -81,10 +106,9 @@ class FTPClient:
 
     def change_dir(self, path: str) -> str:
         """Cambia de directorio (CWD)"""
-        response = self.send_command("CWD", path)
-        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
-            raise FTPClientError(self._parse_code(response), "Error cambiando directorio")
-        return response
+        if not validate_path(path):
+            raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Ruta inválida")
+        return self.send_command("CWD", path)
 
     def make_dir(self, path: str) -> str:
         """Crea un directorio (MKD)"""
@@ -133,11 +157,18 @@ class FTPClient:
 
     def download_file(self, remote_path: str, local_path: str = None) -> str:
         """Descarga un archivo usando RETR."""
+        if not validate_file_name(remote_path):
+            raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Nombre de archivo inválido")
         # Si no se especifica el archivo local, se utiliza el mismo nombre
         if local_path is None:
             local_path = remote_path
 
         self._setup_data_connection()
+
+        # Si hay punto de reinicio, enviarlo
+        if self.restart_point is not None:
+            self.send_command("REST", str(self.restart_point))
+            self.restart_point = None
 
         # Enviar comando RETR
         response = self.send_command("RETR", remote_path)
@@ -159,6 +190,11 @@ class FTPClient:
         """Sube un archivo usando STOR."""
         self._setup_data_connection()
 
+        # Si hay punto de reinicio, enviarlo
+        if self.restart_point is not None:
+            self.send_command("REST", str(self.restart_point))
+            self.restart_point = None
+
         response = self.send_command("STOR", remote_path)
         if self._parse_code(response) not in (125, 150):
             raise FTPTransferError(self._parse_code(response), "Error en STOR")
@@ -179,11 +215,10 @@ class FTPClient:
         self.mode = TransferMode.PASSIVE
         return response
 
-    def enter_active_mode(self, ip_port: str) -> str:
-        """Activa modo PORT (formato: h1,h2,h3,h4,p1,p2)."""
-        response = self.send_command("PORT", ip_port)
-        self.mode = TransferMode.ACTIVE
-        return response
+    def enter_active_mode(self, host: str, port: int) -> str:
+        """Activa modo PORT con validación."""
+        port_args, port = validate_port_args(host, port)
+        return self.send_command("PORT", port_args)
 
     def quit(self) -> str:
         """Cierra la conexión."""
@@ -258,6 +293,112 @@ class FTPClient:
             if "\r\n" in chunk:
                 break
         return "".join(response).strip()
+
+    def set_type(self, type_char: str, format_char: str = None) -> str:
+        """Configura el tipo de transferencia."""
+        if not validate_transfer_type(type_char, format_char):
+            raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Tipo de transferencia inválido")
+        args = [type_char]
+        if format_char:
+            args.append(format_char)
+        response = self.send_command("TYPE", *args)
+        if self._parse_code(response) == FTPResponseCode.FILE_ACTION_COMPLETED:
+            self.transfer_type = type_char
+        return response
+
+    def set_mode(self, mode: str) -> str:
+        """Configura el modo de transferencia."""
+        if not validate_transfer_mode(mode):
+            raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Modo inválido")
+        response = self.send_command("MODE", mode)
+        if self._parse_code(response) == FTPResponseCode.FILE_ACTION_COMPLETED:
+            self.transfer_mode = mode
+        return response
+
+    def set_structure(self, structure: str) -> str:
+        """Configura la estructura del archivo."""
+        if not validate_structure(structure):
+            raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Estructura inválida")
+        response = self.send_command("STRU", structure)
+        if self._parse_code(response) == FTPResponseCode.FILE_ACTION_COMPLETED:
+            self.structure = structure
+        return response
+
+    def set_restart_point(self, marker: str) -> str:
+        """Establece el punto de reinicio para transferencias."""
+        point = parse_restart_marker(marker)
+        if point is None:
+            raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Marcador de reinicio inválido")
+        response = self.send_command("REST", str(point))
+        if self._parse_code(response) == FTPResponseCode.FILE_ACTION_COMPLETED:
+            self.restart_point = point
+        return response
+
+    def allocate(self, size: str) -> str:
+        """Reserva espacio para la siguiente transferencia."""
+        alloc_size = parse_allocation_size(size)
+        if alloc_size is None:
+            raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Tamaño de asignación inválido")
+        return self.send_command("ALLO", str(alloc_size))
+
+    def handle_account(self, account: str) -> str:
+        """Maneja la información de cuenta adicional."""
+        return self.send_command("ACCT", account)
+
+    def reinitialize(self) -> str:
+        """Reinicializa la conexión."""
+        response = self.send_command("REIN")
+        if self._parse_code(response) == FTPResponseCode.READY_FOR_NEW_USER:
+            self.current_user = None
+        return response
+
+    def get_system(self) -> str:
+        """Obtiene información del sistema."""
+        return self.send_command("SYST")
+
+    def get_status(self, path: str = "") -> str:
+        """Obtiene el estado del servidor o archivo."""
+        return self.send_command("STAT", path)
+
+    def store_unique(self, local_path: str) -> str:
+        """Almacena un archivo con nombre único."""
+        self._setup_data_connection()
+        response = self.send_command("STOU")
+        if self._parse_code(response) not in (125, 150):
+            raise FTPTransferError(self._parse_code(response), "Error en STOU")
+        self._send_data(local_path)
+        return self._get_response()
+
+    def get_help(self, command: str = "") -> str:
+        """Obtiene ayuda sobre comandos."""
+        return self.send_command("HELP", command)
+
+    def noop(self) -> str:
+        """Mantiene la conexión activa."""
+        return self.send_command("NOOP")
+
+    def abort(self) -> str:
+        """Aborta la transferencia en curso."""
+        return self.send_command("ABOR")
+
+    def get_features(self) -> dict:
+        """Obtiene y parsea características del servidor."""
+        response = self.send_command("FEAT")
+        return parse_features_response(response)
+
+    def list_directory(self, path: str = "") -> list[dict]:
+        """Lista directorio con formato estructurado."""
+        if path and not validate_path(path):
+            raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Ruta inválida")
+        response = self.send_command("LIST", path)
+        return parse_list_response(response)
+
+    def change_to_parent_dir(self) -> str:
+        """Cambia al directorio padre (CDUP)."""
+        response = self.send_command("CDUP")
+        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+            raise FTPClientError(self._parse_code(response), "Error cambiando al directorio padre")
+        return response
 
 #---------------#
 # FTP Client CLI#

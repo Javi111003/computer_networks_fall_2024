@@ -2,6 +2,7 @@ import socket
 import os
 from pathlib import Path
 import shutil
+import random
 
 class FTPServer:
     def __init__(self, host='0.0.0.0', port=21):
@@ -17,6 +18,10 @@ class FTPServer:
         self.structure = 'F'      # File por defecto
         self.mode = 'S'          # Stream por defecto
         self.data_socket = None
+        self.passive_server = None
+        self.passive_mode = False
+        self.data_addr = None
+        self.data_port = None
 
     def _register_commands(self):
         # Registro de comandos con sus funciones correspondientes
@@ -124,13 +129,43 @@ class FTPServer:
         except:
             client_socket.send(b"550 Error al cambiar directorio\r\n")
 
+    def create_data_connection(self):
+        """Establece la conexión de datos según el modo actual"""
+        if self.passive_mode:
+            if self.passive_server:
+                self.data_socket, addr = self.passive_server.accept()
+                return True
+        else:
+            if self.data_addr and self.data_port:
+                self.data_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                try:
+                    self.data_socket.connect((self.data_addr, self.data_port))
+                    return True
+                except:
+                    return False
+        return False
+
     def handle_list(self, client_socket, args):
+        """LIST requiere conexión de datos"""
+        if not self.create_data_connection():
+            client_socket.send(b"425 No data connection\r\n")
+            return
+
         try:
+            client_socket.send(b"150 Opening data connection for LIST\r\n")
             files = "\r\n".join(str(f.name) for f in self.current_dir.iterdir())
-            response = f"150 Lista de archivos:\r\n{files}\r\n226 Transferencia completa\r\n"
-            client_socket.send(response.encode())
+            self.data_socket.send(files.encode() + b"\r\n")
+            self.data_socket.close()
+            client_socket.send(b"226 Transfer complete\r\n")
         except:
-            client_socket.send(b"550 Error al listar archivos\r\n")
+            client_socket.send(b"550 Error listing files\r\n")
+        finally:
+            if self.data_socket:
+                self.data_socket.close()
+                self.data_socket = None
+            if self.passive_server:
+                self.passive_server.close()
+                self.passive_server = None
 
     def handle_mkd(self, client_socket, args):
         if not args:
@@ -223,10 +258,45 @@ class FTPServer:
         client_socket.send(b"220 Servicio reiniciado\r\n")
 
     def handle_port(self, client_socket, args):
-        client_socket.send(b"200 Comando PORT no implementado\r\n")
+        """Maneja el comando PORT para modo activo"""
+        if not args:
+            client_socket.send(b"501 Syntax error\r\n")
+            return
+        
+        # Formato PORT h1,h2,h3,h4,p1,p2
+        try:
+            nums = args[0].split(',')
+            if len(nums) != 6:
+                raise ValueError
+            
+            # Reconstruir dirección IP y puerto
+            self.data_addr = '.'.join(nums[:4])
+            self.data_port = (int(nums[4]) << 8) + int(nums[5])
+            self.passive_mode = False
+            
+            client_socket.send(b"200 PORT command successful\r\n")
+        except:
+            client_socket.send(b"501 Invalid PORT command\r\n")
 
     def handle_pasv(self, client_socket, args):
-        client_socket.send(b"502 Modo pasivo no implementado\r\n")
+        """Maneja el comando PASV para modo pasivo"""
+        try:
+            self.passive_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # Elegir puerto aleatorio entre 1024-65535
+            passive_port = random.randint(1024, 65535)
+            self.passive_server.bind((self.host, passive_port))
+            self.passive_server.listen(1)
+            
+            # Obtener IP local
+            host_parts = socket.gethostbyname(socket.gethostname()).split('.')
+            port_high = passive_port >> 8
+            port_low = passive_port & 0xFF
+            
+            response = f"227 Entering Passive Mode ({','.join(host_parts)},{port_high},{port_low})\r\n"
+            client_socket.send(response.encode())
+            self.passive_mode = True
+        except:
+            client_socket.send(b"425 Can't enter passive mode\r\n")
 
     def handle_type(self, client_socket, args):
         if not args:
@@ -259,41 +329,67 @@ class FTPServer:
             client_socket.send(b"504 Modo no soportado\r\n")
 
     def handle_retr(self, client_socket, args):
+        """RETR requiere conexión de datos"""
         if not args:
-            client_socket.send(b"501 Sintaxis: RETR filename\r\n")
+            client_socket.send(b"501 Syntax error\r\n")
             return
+
+        if not self.create_data_connection():
+            client_socket.send(b"425 No data connection\r\n")
+            return
+
         try:
             file_path = self.current_dir / args[0]
             if file_path.is_file():
+                client_socket.send(b"150 Opening data connection for file transfer\r\n")
                 with open(file_path, 'rb') as f:
-                    data = f.read()
-                client_socket.send(b"150 Iniciando transferencia\r\n")
-                client_socket.send(data)
-                client_socket.send(b"226 Transferencia completa\r\n")
+                    while True:
+                        data = f.read(8192)
+                        if not data:
+                            break
+                        self.data_socket.send(data)
+                client_socket.send(b"226 Transfer complete\r\n")
             else:
-                client_socket.send(b"550 Archivo no encontrado\r\n")
+                client_socket.send(b"550 File not found\r\n")
         except:
-            client_socket.send(b"550 Error al leer archivo\r\n")
+            client_socket.send(b"550 Error reading file\r\n")
+        finally:
+            if self.data_socket:
+                self.data_socket.close()
+                self.data_socket = None
+            if self.passive_server:
+                self.passive_server.close()
+                self.passive_server = None
 
     def handle_stor(self, client_socket, args):
+        """STOR requiere conexión de datos"""
         if not args:
-            client_socket.send(b"501 Sintaxis: STOR filename\r\n")
+            client_socket.send(b"501 Syntax error\r\n")
             return
+
+        if not self.create_data_connection():
+            client_socket.send(b"425 No data connection\r\n")
+            return
+
         try:
             file_path = self.current_dir / args[0]
-            client_socket.send(b"150 Listo para recibir datos\r\n")
-            
-            # Recibir datos
+            client_socket.send(b"150 Opening data connection for file transfer\r\n")
             with open(file_path, 'wb') as f:
                 while True:
-                    data = client_socket.recv(1024)
+                    data = self.data_socket.recv(8192)
                     if not data:
                         break
                     f.write(data)
-            
-            client_socket.send(b"226 Transferencia completa\r\n")
+            client_socket.send(b"226 Transfer complete\r\n")
         except:
-            client_socket.send(b"550 Error al almacenar archivo\r\n")
+            client_socket.send(b"550 Error storing file\r\n")
+        finally:
+            if self.data_socket:
+                self.data_socket.close()
+                self.data_socket = None
+            if self.passive_server:
+                self.passive_server.close()
+                self.passive_server = None
 
     def handle_stou(self, client_socket, args):
         try:
