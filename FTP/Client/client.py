@@ -153,7 +153,7 @@ class FTPClient:
         if self._parse_code(final_response) != FTPResponseCode.FILE_ACTION_COMPLETED:
             raise FTPTransferError(self._parse_code(final_response), "Error en RETR final")
 
-        return final_response
+        return response + "\n" + final_response
 
     def upload_file(self, local_path: str, remote_path: str) -> str:
         """Sube un archivo usando STOR."""
@@ -168,7 +168,7 @@ class FTPClient:
         if self._parse_code(final_response) != FTPResponseCode.FILE_ACTION_COMPLETED:
             raise FTPTransferError(self._parse_code(final_response), "Error en STOR final")
 
-        return final_response
+        return response + "\n" + final_response
 
     def enter_passive_mode(self) -> str:
         """Activa modo PASV y configura conexión de datos."""
@@ -292,7 +292,7 @@ def main():
                 response = client.execute(args.command, args.arg1 or "")
                 print(response)
         else:
-            print(pass_response)
+            print(user_response + "\n" + pass_response)
 
     except FTPClientError as e:
         print(f"Error: {e}")
