@@ -21,14 +21,6 @@ def validate_structure(structure: str) -> bool:
     """Valida la estructura del archivo."""
     return structure in {'F', 'R', 'P'}
 
-def parse_allocation_size(size_str: str) -> Optional[int]:
-    """Valida y parsea el tamaño para ALLO."""
-    try:
-        size = int(size_str)
-        return size if size > 0 else None
-    except ValueError:
-        return None
-
 def parse_restart_marker(marker: str) -> Optional[int]:
     """Valida y parsea el marcador para REST."""
     try:
@@ -43,23 +35,36 @@ def validate_path(path: str) -> bool:
     return not any(char in path for char in forbidden_chars)
 
 def parse_list_response(response: str) -> list[dict]:
-    """Parsea la respuesta del comando LIST a un formato estructurado."""
-    entries = []
-    for line in response.splitlines():
-        # Formato típico Unix: "drwxr-xr-x 2 root root 4096 Dec 1 12:00 folder"
-        parts = line.split(None, 8)
-        if len(parts) >= 9:
-            entries.append({
-                'type': 'd' if parts[0].startswith('d') else '-',
-                'permissions': parts[0],
-                'links': int(parts[1]),
-                'owner': parts[2],
-                'group': parts[3],
-                'size': int(parts[4]),
-                'date': f"{parts[5]} {parts[6]} {parts[7]}",
-                'name': parts[8]
-            })
-    return entries
+    """
+    Parsea la respuesta del comando LIST y devuelve una lista de diccionarios
+    con información de archivos.
+    """
+    files_info = []
+    for line in response.split('\n'):
+        line = line.strip()
+        if line:
+            # Dividir la línea en sus componentes
+            parts = line.split(None, 1)  # Dividir en máximo 2 partes
+            if len(parts) >= 2:
+                # El último elemento es el tamaño y el resto es el nombre
+                size = parts[0]
+                name = parts[1]
+                
+                # Crear diccionario con la información del archivo
+                file_info = {
+                    'nombre': name,
+                    'tamaño': size
+                }
+                files_info.append(file_info)
+            else:
+                # Si solo hay una parte, asumimos que es el nombre
+                file_info = {
+                    'nombre': parts[0],
+                    'tamaño': '0'
+                }
+                files_info.append(file_info)
+    
+    return files_info
 
 def parse_mlsd_response(response: str) -> list[dict]:
     """Parsea la respuesta del comando MLSD (listado en formato máquina)."""

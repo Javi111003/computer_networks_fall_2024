@@ -6,7 +6,7 @@ from typing import Optional, Dict, Callable
 from FTP.Common.constants import FTPResponseCode, TransferMode, DEFAULT_BUFFER_SIZE, DEFAULT_TIMEOUT
 from FTP.Common.exceptions import FTPClientError, FTPTransferError, FTPAuthError, FTPConnectionError
 from FTP.Common.utils import (validate_transfer_type, validate_transfer_mode,
-                            validate_structure, parse_allocation_size, validate_port_args,
+                            validate_structure, validate_port_args,
                             parse_restart_marker, validate_path,
                             parse_features_response, parse_list_response)
 
@@ -37,12 +37,10 @@ class FTPClient:
             "TYPE": self.set_type,
             "MODE": self.set_mode,
             "STRU": self.set_structure,
-            "ACCT": self.handle_account,
             "REIN": self.reinitialize,
             "SYST": self.get_system,
             "STAT": self.get_status,
             "REST": self.set_restart_point,
-            "ALLO": self.allocate,
             "STOU": self.store_unique,
             "HELP": self.get_help,
             "NOOP": self.noop,
@@ -106,9 +104,10 @@ class FTPClient:
         if not validate_path(path):
             raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Ruta inválida")
         response = self.send_command("CWD", path)
-        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
-            raise FTPClientError(self._parse_code(response), "Error cambiando de directorio")
-        return response
+        # Verificar si la respuesta contiene un código de éxito (250 o 200)
+        if self._parse_code(response) in [250, 200]:
+            return response
+        raise FTPClientError(self._parse_code(response), "Error cambiando de directorio")
 
     def make_dir(self, path: str) -> str:
         """Crea un directorio (MKD)"""
@@ -120,14 +119,16 @@ class FTPClient:
     def remove_dir(self, path: str) -> str:
         """Elimina un directorio (RMD)"""
         response = self.send_command("RMD", path)
-        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+        # El código 250 indica éxito para RMD
+        if self._parse_code(response) != 250:
             raise FTPClientError(self._parse_code(response), "Error eliminando directorio")
         return response
 
     def delete_file(self, filename: str) -> str:
         """Elimina un archivo (DELE)"""
         response = self.send_command("DELE", filename)
-        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+        # El código 250 indica éxito para DELE
+        if self._parse_code(response) != 250:
             raise FTPClientError(self._parse_code(response), "Error eliminando archivo")
         return response
 
@@ -338,17 +339,6 @@ class FTPClient:
             self.restart_point = point
         return response
 
-    def allocate(self, size: str) -> str:
-        """Reserva espacio para la siguiente transferencia."""
-        alloc_size = parse_allocation_size(size)
-        if alloc_size is None:
-            raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Tamaño de asignación inválido")
-        return self.send_command("ALLO", str(alloc_size))
-
-    def handle_account(self, account: str) -> str:
-        """Maneja la información de cuenta adicional."""
-        return self.send_command("ACCT", account)
-
     def reinitialize(self) -> str:
         """Reinicializa la conexión."""
         response = self.send_command("REIN")
@@ -396,15 +386,54 @@ class FTPClient:
         """Lista directorio con formato estructurado."""
         if path and not validate_path(path):
             raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Ruta inválida")
-        response = self.send_command("LIST", path)
-        return parse_list_response(response)
+        
+        self._setup_data_connection()
+        
+        # Enviar comando LIST y obtener respuesta inicial
+        initial_response = self.send_command("LIST", path)
+        if self._parse_code(initial_response) not in (125, 150):
+            raise FTPClientError(self._parse_code(initial_response), "Error en comando LIST")
+        
+        # Recibir datos del socket de datos
+        data = []
+        try:
+            while True:
+                chunk = self.data_sock.recv(DEFAULT_BUFFER_SIZE)
+                if not chunk:
+                    break
+                data.append(chunk.decode(errors='ignore'))
+        except Exception as e:
+            print(f"Error recibiendo datos: {e}")
+        finally:
+            self._close_data_connection()
+            
+        # Obtener respuesta final del servidor
+        final_response = self._get_response()
+        if self._parse_code(final_response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+            raise FTPClientError(self._parse_code(final_response), "Error completando LIST")
+        
+        # Procesar los datos recibidos
+        received_data = "".join(data)
+        if not received_data.strip():
+            return []
+            
+        # Usar la función de utilidad para parsear la respuesta
+        try:
+            return parse_list_response(received_data)
+        except Exception as e:
+            print(f"Error parseando respuesta: {e}")
+            # En caso de error, devolver al menos la información en bruto
+            return [{'nombre': line.strip(), 'tamaño': '0'} 
+                   for line in received_data.split('\n') 
+                   if line.strip()]
 
     def change_to_parent_dir(self) -> str:
         """Cambia al directorio padre (CDUP)."""
         response = self.send_command("CDUP")
-        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
-            raise FTPClientError(self._parse_code(response), "Error cambiando al directorio padre")
-        return response
+        # Verificar si la respuesta contiene un código de éxito (250 o 200)
+        if self._parse_code(response) in [250, 200]:
+            return response
+        raise FTPClientError(self._parse_code(response), "Error cambiando al directorio padre")
 
 #---------------#
 # FTP Client CLI#

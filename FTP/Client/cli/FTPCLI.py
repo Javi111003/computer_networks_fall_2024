@@ -7,14 +7,15 @@ from rich.panel import Panel
 from rich import print as rprint
 from rich.text import Text
 from rich.style import Style
+import re
 
 class FTPCLI(cmd.Cmd):
     # Usando Text de rich para el intro para asegurar el color
     intro = None  # Cambiado a None para evitar que cmd.Cmd lo imprima
     _intro_text = Text("""
 ╔════════════════════════════════════════╗
-║             FTP Client v1.0             ║
-║      Escriba 'help' para ayuda          ║
+║             FTP Client v1.0            ║
+║      Escriba 'help' para ayuda         ║ 
 ╚════════════════════════════════════════╝
     """, style="blue")
 
@@ -89,7 +90,6 @@ class FTPCLI(cmd.Cmd):
         except Exception as e:
             self.console.print(f"[red]Error: {e}[/red]")
 
-    # Puedes mantener login como una alternativa conveniente
     def do_login(self, arg):
         """Inicia sesión en el servidor: login <username> <password>"""
         if not self.client:
@@ -112,47 +112,93 @@ class FTPCLI(cmd.Cmd):
             self.console.print(f"[red]✗ Error de autenticación: {e}[/red]")
 
     def do_list(self, arg):
-        """Lists files on the server: LIST [path]"""
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}")
-        ) as progress:
-            task = progress.add_task(description="Obteniendo lista de archivos...", total=None)
-            try:
-                response = self.client.execute("LIST", arg)
-                table = Table(show_header=True, header_style="bold magenta")
-                table.add_column("Permisos")
-                table.add_column("Enlaces")
-                table.add_column("Propietario")
-                table.add_column("Grupo")
-                table.add_column("Tamaño")
-                table.add_column("Fecha")
-                table.add_column("Nombre")
-
-                for line in response.split('\n'):
-                    if line.strip():
-                        parts = line.split()
-                        if len(parts) >= 9:
-                            table.add_row(*parts[:7], " ".join(parts[8:]))
-
-                self.console.print(table)
-            except Exception as e:
-                self.console.print(f"[red]Error: {e}[/red]")
+        """Lista archivos en el servidor: LIST [path]"""
+        try:
+            # Primero entrar en modo pasivo
+            self.client.enter_passive_mode()
+            
+            # Obtener y procesar la lista de archivos
+            file_list = self.client.list_directory(arg)
+            
+            if not file_list:
+                self.console.print("[yellow]Directorio vacío o error listando archivos[/yellow]")
+                return
+            
+            # Imprimir encabezado
+            self.console.print("\n[bold magenta]Contenido del Directorio:[/bold magenta]")
+            self.console.print("[cyan]" + "-" * 50 + "[/cyan]")
+            
+            # Contador de archivos válidos
+            total_files = 0
+            
+            # Mostrar cada archivo
+            for file_info in file_list:
+                nombre = file_info.get('nombre', '').strip()
+                tamaño = file_info.get('tamaño', '').strip()
+                
+                # Si el nombre contiene el tamaño (debido al formato del servidor)
+                if nombre and nombre.count(' ') > 0:
+                    partes = nombre.rsplit(None, 1)
+                    if len(partes) == 2:
+                        nombre, tam = partes
+                        if tam.isdigit():
+                            tamaño = tam
+                
+                # Mostrar solo si el nombre es válido
+                if nombre and nombre != "0":
+                    total_files += 1
+                    
+                    # Convertir tamaño a formato legible
+                    try:
+                        tamaño_num = int(tamaño)
+                        if tamaño_num >= 1024*1024*1024:
+                            tamaño_fmt = f"{tamaño_num/(1024*1024*1024):.1f} GB"
+                        elif tamaño_num >= 1024*1024:
+                            tamaño_fmt = f"{tamaño_num/(1024*1024):.1f} MB"
+                        elif tamaño_num >= 1024:
+                            tamaño_fmt = f"{tamaño_num/1024:.1f} KB"
+                        else:
+                            tamaño_fmt = f"{tamaño_num} B"
+                    except (ValueError, TypeError):
+                        tamaño_fmt = tamaño if tamaño else "???"
+                    
+                    # Mostrar archivo con formato
+                    self.console.print(f"[cyan]{nombre:<40}[/cyan] [green]{tamaño_fmt:>10}[/green]")
+            
+            # Mostrar línea final y total
+            self.console.print("[cyan]" + "-" * 50 + "[/cyan]")
+            self.console.print(f"[blue]Total: {total_files} elementos[/blue]\n")
+            
+        except Exception as e:
+            self.console.print(f"[red]Error: {str(e)}[/red]")
 
     def do_retr(self, arg):
         """Downloads a file: RETR <remote_path> <local_path>"""
         args = arg.split()
         if len(args) != 2:
             self.console.print("[red]Error: Uso: RETR <remote_path> <local_path>[/red]")
+            self.console.print("[yellow]Ejemplo: retr archivo.txt descarga.txt[/yellow]")
             return
 
-        with Progress() as progress:
-            task = progress.add_task("[cyan]Descargando...", total=100)
-            try:
-                response = self.client.download_file(args[0], args[1])
-                self.console.print(f"[green]✓ {response}[/green]")
-            except Exception as e:
-                self.console.print(f"[red]✗ Error: {e}[/red]")
+        remote_path, local_path = args
+        try:
+            # Solo mostramos una barra de progreso y la respuesta final
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                transient=True
+            ) as progress:
+                task = progress.add_task("[cyan]Descargando archivo...", total=None)
+                response = self.client.download_file(remote_path, local_path)
+                
+            if "226" in response:  # Transferencia exitosa
+                self.console.print(f"[green]✓ Archivo descargado exitosamente como '{local_path}'[/green]")
+            else:
+                self.console.print(f"[yellow]{response}[/yellow]")
+
+        except Exception as e:
+            self.console.print(f"[red]✗ Error: {str(e)}[/red]")
+            self.console.print("[yellow]Tip: Verifique que el archivo existe y tiene permisos[/yellow]")
 
     def do_stor(self, arg):
         """Uploads a file: STOR <local_path> <remote_path>"""
@@ -161,13 +207,63 @@ class FTPCLI(cmd.Cmd):
             self.console.print("[red]Error: Uso: STOR <local_path> <remote_path>[/red]")
             return
 
-        with Progress() as progress:
-            task = progress.add_task("[cyan]Subiendo...", total=100)
-            try:
+        try:
+            # Verificar que el archivo existe antes de intentar subirlo
+            from pathlib import Path
+            if not Path(args[0]).exists():
+                self.console.print(f"[red]Error: El archivo local '{args[0]}' no existe[/red]")
+                return
+
+            # Solo mostramos una barra de progreso y la respuesta final
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                transient=True  # Esto hace que la barra desaparezca al completar
+            ) as progress:
+                task = progress.add_task("[cyan]Subiendo archivo...", total=None)
                 response = self.client.upload_file(args[0], args[1])
-                self.console.print(f"[green]✓ {response}[/green]")
-            except Exception as e:
-                self.console.print(f"[red]✗ Error: {e}[/red]")
+                
+            # Mostrar solo el mensaje de éxito
+            if "226" in response:  # Si la transferencia fue exitosa
+                self.console.print("[green]✓ Archivo subido exitosamente[/green]")
+            else:
+                self.console.print(f"[yellow]{response}[/yellow]")
+                
+        except Exception as e:
+            self.console.print(f"[red]✗ Error: {e}[/red]")
+
+    def do_appe(self, arg):
+        """Añade datos a un archivo: APPE <local_path> <remote_path>"""
+        args = arg.split()
+        if len(args) != 2:
+            self.console.print("[red]Error: Uso: APPE <local_path> <remote_path>[/red]")
+            self.console.print("[yellow]Ejemplo: appe local.txt remoto.txt[/yellow]")
+            return
+
+        local_path, remote_path = args
+        try:
+            # Verificar archivo local
+            from pathlib import Path
+            if not Path(local_path).exists():
+                self.console.print(f"[red]Error: El archivo local '{local_path}' no existe[/red]")
+                return
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                transient=True
+            ) as progress:
+                task = progress.add_task("[cyan]Añadiendo datos...", total=None)
+                response = self.client.append_file(local_path, remote_path)
+                
+            if "226" in response:
+                self.console.print(f"[green]✓ Datos añadidos exitosamente a '{remote_path}'[/green]")
+            else:
+                self.console.print(f"[yellow]{response}[/yellow]")
+
+        except Exception as e:
+            self.console.print(f"[red]✗ Error: {str(e)}[/red]")
+            self.console.print("[yellow]Tip: Verifique permisos y espacio disponible[/yellow]")
 
     def do_quit(self, arg):
         """Closes the connection: QUIT"""
@@ -200,6 +296,7 @@ class FTPCLI(cmd.Cmd):
             "TRANSFERENCIA": {
                 "retr": "Descargar archivo: retr <remote_path> <local_path>",
                 "stor": "Subir archivo: stor <local_path> <remote_path>",
+                "pasv": "Entrar en modo pasivo",
                 "type": "Tipo de transferencia: type <A|E|I>",
                 "mode": "Modo de transferencia: mode <S|B|C>",
                 "stru": "Estructura de archivo: stru <F|R|P>",
@@ -218,6 +315,15 @@ class FTPCLI(cmd.Cmd):
                 "help": "Mostrar esta ayuda",
                 "noop": "Mantener conexión activa",
                 "feat": "Listar características del servidor"
+            },
+            "EXTRAS": {
+                "site": "Ejecutar comando específico del sitio: SITE <comando> [args]",
+                "opts": "Configurar opciones: OPTS <comando> <opciones>",
+                "appe": "Añadir datos a archivo: APPE <local_path> <remote_path>",
+                "abor": "Abortar operación actual",
+                "rein": "Reinicializar conexión",
+                "nlst": "Listar solo nombres de archivos: NLST [path]",
+                "stou": "Almacenar archivo con nombre único: STOU <local_path>"
             }
         }
 
@@ -269,26 +375,83 @@ class FTPCLI(cmd.Cmd):
     def do_pwd(self, arg):
         """Muestra el directorio actual"""
         try:
+            # Asegurar que estamos en modo pasivo
+            self.client.enter_passive_mode()
+            
             response = self.client.get_current_dir()
-            self.console.print(f"[cyan]Directorio actual: {response}[/cyan]")
+            # Extraer el path entre comillas y limpiarlo
+            import re
+            path_match = re.search(r'"([^"]*)"', response)
+            if path_match:
+                path = path_match.group(1)
+                # Limpiar múltiples barras y asegurar formato correcto
+                path = path.replace('//', '/')
+                if not path or path == '/':
+                    self.console.print("[cyan]Directorio actual: /[/cyan] (directorio raíz)")
+                else:
+                    self.console.print(f"[cyan]Directorio actual: {path}[/cyan]")
+            else:
+                self.console.print(f"[cyan]{response}[/cyan]")
         except Exception as e:
             self.console.print(f"[red]Error: {e}[/red]")
 
     def do_cwd(self, arg):
         """Cambia el directorio de trabajo: CWD <path>"""
+        if not arg:
+            self.console.print("[red]Error: Uso: CWD <path>[/red]")
+            return
         try:
             response = self.client.change_dir(arg)
-            self.console.print(f"[green]✓ {response}[/green]")
+            
+            # Mostrar el directorio actual después del cambio
+            try:
+                # Obtener y mostrar el nuevo directorio
+                pwd_response = self.client.get_current_dir()
+                path_match = re.search(r'"([^"]*)"', pwd_response)
+                if path_match:
+                    current_path = path_match.group(1).replace('//', '/')
+                    self.console.print("[green]✓ Directorio cambiado exitosamente[/green]")
+                    self.console.print(f"[cyan]Directorio actual: {current_path}[/cyan]")
+                else:
+                    self.console.print("[green]✓ Directorio cambiado exitosamente[/green]")
+            except:
+                # Si hay error al obtener el path, al menos confirmar el cambio
+                self.console.print("[green]✓ Directorio cambiado exitosamente[/green]")
+            
         except Exception as e:
-            self.console.print(f"[red]Error: {e}[/red]")
+            # Extraer solo el mensaje de error sin el código
+            error_msg = str(e)
+            if " - " in error_msg:
+                error_msg = error_msg.split(" - ")[1]
+            self.console.print(f"[red]Error: {error_msg}[/red]")
+            self.console.print("[yellow]Tip: Verifique que el directorio existe y tiene permisos[/yellow]")
 
     def do_cdup(self, arg):
         """Cambia al directorio padre"""
         try:
             response = self.client.change_to_parent_dir()
-            self.console.print(f"[green]✓ {response}[/green]")
+            
+            # Mostrar el directorio actual después del cambio
+            try:
+                # Obtener y mostrar el nuevo directorio
+                pwd_response = self.client.get_current_dir()
+                path_match = re.search(r'"([^"]*)"', pwd_response)
+                if path_match:
+                    current_path = path_match.group(1).replace('//', '/')
+                    self.console.print("[green]✓ Cambiado al directorio superior[/green]")
+                    self.console.print(f"[cyan]Directorio actual: {current_path}[/cyan]")
+                else:
+                    self.console.print("[green]✓ Cambiado al directorio superior[/green]")
+            except:
+                # Si hay error al obtener el path, al menos confirmar el cambio
+                self.console.print("[green]✓ Cambiado al directorio superior[/green]")
+                
         except Exception as e:
-            self.console.print(f"[red]Error: {e}[/red]")
+            # Extraer solo el mensaje de error sin el código
+            error_msg = str(e)
+            if " - " in error_msg:
+                error_msg = error_msg.split(" - ")[1]
+            self.console.print(f"[red]Error: {error_msg}[/red]")
 
     def do_mkd(self, arg):
         """Crea un directorio: MKD <path>"""
@@ -300,19 +463,41 @@ class FTPCLI(cmd.Cmd):
 
     def do_rmd(self, arg):
         """Elimina un directorio: RMD <path>"""
+        if not arg:
+            self.console.print("[red]Error: Uso: RMD <path>[/red]")
+            return
+            
         try:
             response = self.client.remove_dir(arg)
-            self.console.print(f"[green]✓ {response}[/green]")
+            if "250" in response:
+                self.console.print(f"[green]✓ Directorio '{arg}' eliminado correctamente[/green]")
+            else:
+                self.console.print(f"[red]Error: {response}[/red]")
         except Exception as e:
-            self.console.print(f"[red]Error: {e}[/red]")
+            error_msg = str(e)
+            if " - " in error_msg:
+                error_msg = error_msg.split(" - ")[1]
+            self.console.print(f"[red]Error: No se pudo eliminar el directorio: {error_msg}[/red]")
 
     def do_dele(self, arg):
         """Elimina un archivo: DELE <filename>"""
+        if not arg:
+            self.console.print("[red]Error: Uso: DELE <filename>[/red]")
+            self.console.print("[yellow]Ejemplo: dele archivo.txt[/yellow]")
+            return
+            
         try:
             response = self.client.delete_file(arg)
-            self.console.print(f"[green]✓ {response}[/green]")
+            if "250" in response:  # Verificar éxito
+                self.console.print(f"[green]✓ Archivo '{arg}' eliminado correctamente[/green]")
+            else:
+                self.console.print(f"[red]Error: {response}[/red]")
         except Exception as e:
-            self.console.print(f"[red]Error: {e}[/red]")
+            error_msg = str(e)
+            if " - " in error_msg:
+                error_msg = error_msg.split(" - ")[1]
+            self.console.print(f"[red]Error: No se pudo eliminar el archivo: {error_msg}[/red]")
+            self.console.print("[yellow]Tip: Verifique que el archivo existe y tiene permisos[/yellow]")
 
     def do_rnfr(self, arg):
         """Especifica el archivo a renombrar: RNFR <old_name>"""
@@ -361,6 +546,136 @@ class FTPCLI(cmd.Cmd):
             self.console.print("[cyan]Características del servidor:[/cyan]")
             for feature, details in features.items():
                 self.console.print(f"[green]- {feature}[/green]: {details}")
+        except Exception as e:
+            self.console.print(f"[red]Error: {e}[/red]")
+
+    def do_site(self, arg):
+        """Ejecuta comando específico del sitio: SITE <comando> [args]"""
+        if not arg:
+            self.console.print("[red]Error: Uso: SITE <comando> [args][/red]")
+            return
+        try:
+            response = self.client.site_command(arg)
+            self.console.print(f"[cyan]{response}[/cyan]")
+        except Exception as e:
+            self.console.print(f"[red]Error: {e}[/red]")
+
+    def do_opts(self, arg):
+        """Configura opciones específicas: OPTS <comando> <opciones>"""
+        args = arg.split()
+        if len(args) < 2:
+            self.console.print("[red]Error: Uso: OPTS <comando> <opciones>[/red]")
+            return
+        try:
+            cmd, *options = args
+            response = self.client.set_options(cmd, *options)
+            self.console.print(f"[cyan]{response}[/cyan]")
+        except Exception as e:
+            self.console.print(f"[red]Error: {e}[/red]")
+
+    def do_appe(self, arg):
+        """Añade datos a un archivo: APPE <local_path> <remote_path>"""
+        args = arg.split()
+        if len(args) != 2:
+            self.console.print("[red]Error: Uso: APPE <local_path> <remote_path>[/red]")
+            self.console.print("[yellow]Ejemplo: appe local.txt remoto.txt[/yellow]")
+            return
+
+        local_path, remote_path = args
+        try:
+            # Verificar archivo local
+            from pathlib import Path
+            if not Path(local_path).exists():
+                self.console.print(f"[red]Error: El archivo local '{local_path}' no existe[/red]")
+                return
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                transient=True
+            ) as progress:
+                task = progress.add_task("[cyan]Añadiendo datos...", total=None)
+                response = self.client.append_file(local_path, remote_path)
+                
+            if "226" in response:
+                self.console.print(f"[green]✓ Datos añadidos exitosamente a '{remote_path}'[/green]")
+            else:
+                self.console.print(f"[yellow]{response}[/yellow]")
+
+        except Exception as e:
+            self.console.print(f"[red]✗ Error: {str(e)}[/red]")
+            self.console.print("[yellow]Tip: Verifique permisos y espacio disponible[/yellow]")
+
+    def do_abor(self, arg):
+        """Aborta la operación actual: ABOR"""
+        try:
+            response = self.client.abort()
+            self.console.print(f"[yellow]Operación abortada: {response}[/yellow]")
+        except Exception as e:
+            self.console.print(f"[red]Error: {e}[/red]")
+
+    def do_rein(self, arg):
+        """Reinicializa la conexión: REIN"""
+        try:
+            response = self.client.reinitialize()
+            self.console.print(f"[yellow]Conexión reinicializada: {response}[/yellow]")
+        except Exception as e:
+            self.console.print(f"[red]Error: {e}[/red]")
+
+    def do_nlst(self, arg):
+        """Lista solo nombres de archivos: NLST [path]"""
+        try:
+            response = self.client.list_files(arg)
+            # Crear tabla para mostrar los resultados
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("Archivos", style="cyan")
+            
+            for file in response.split('\n'):
+                if file.strip():
+                    table.add_row(file.strip())
+                    
+            self.console.print(table)
+        except Exception as e:
+            self.console.print(f"[red]Error: {e}[/red]")
+
+    def do_stou(self, arg):
+        """Almacena archivo con nombre único: STOU <local_path>"""
+        if not arg:
+            self.console.print("[red]Error: Uso: STOU <local_path>[/red]")
+            self.console.print("[yellow]Ejemplo: stou archivo.txt[/yellow]")
+            return
+
+        try:
+            # Verificar archivo local
+            from pathlib import Path
+            if not Path(arg).exists():
+                self.console.print(f"[red]Error: El archivo '{arg}' no existe[/red]")
+                return
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                transient=True
+            ) as progress:
+                task = progress.add_task("[cyan]Subiendo archivo...", total=None)
+                response = self.client.store_unique(arg)
+                
+            if "226" in response:
+                # Extraer el nombre generado del mensaje (si está disponible)
+                nombre_generado = response.split("Saved as")[-1].strip() if "Saved as" in response else "nombre único"
+                self.console.print(f"[green]✓ Archivo subido exitosamente como {nombre_generado}[/green]")
+            else:
+                self.console.print(f"[yellow]{response}[/yellow]")
+
+        except Exception as e:
+            self.console.print(f"[red]✗ Error: {str(e)}[/red]")
+            self.console.print("[yellow]Tip: Verifique permisos y espacio disponible[/yellow]")
+
+    def do_pasv(self, arg):
+        """Entra en modo pasivo para transferencias"""
+        try:
+            response = self.client.enter_passive_mode()
+            self.console.print(f"[green]✓ {response}[/green]")
         except Exception as e:
             self.console.print(f"[red]Error: {e}[/red]")
 
