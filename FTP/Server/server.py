@@ -1,8 +1,8 @@
 import socket
-import os
 from pathlib import Path
 import shutil
 import random
+from FTP.Server.Commands.auth import UserCommand, PassCommand
 
 class FTPServer:
     def __init__(self, host='0.0.0.0', port=21):
@@ -25,8 +25,8 @@ class FTPServer:
 
     def _register_commands(self):
         # Registro de comandos con sus funciones correspondientes
-        self.add_command("USER", self.handle_user)
-        self.add_command("PASS", self.handle_pass)
+        self.add_command("USER", UserCommand()) # guía del patrón command
+        self.add_command("PASS", PassCommand()) # APLICAR AL RESTO DE COMANDOS
         self.add_command("PWD", self.handle_pwd)
         self.add_command("CWD", self.handle_cwd)
         self.add_command("LIST", self.handle_list)
@@ -89,8 +89,11 @@ class FTPServer:
                 cmd = cmd_parts[0].upper()
                 args = cmd_parts[1:] if len(cmd_parts) > 1 else []
 
-                if cmd in self.commands:
-                    self.commands[cmd](client_socket, args)
+                if cmd in self.commands:   # Guía del patrón command
+                    command = self.commands[cmd]
+                    response = command.execute(self, client_socket, args)
+                    if response:
+                        client_socket.send(response.encode())
                 else:
                     client_socket.send(b"502 Comando no implementado\r\n")
 
@@ -100,7 +103,11 @@ class FTPServer:
 
         client_socket.close()
 
-    # Implementación de comandos
+    # ----------------#
+    # Manejadores de comandos #
+    # ----------------#
+
+    # LLEVAR A CLASES CADA COMANDO , CON SU IMPLEMENTACIÓN DE EXECUTE (ENCAPSULAMIENTO DE ESTOS HANDLERS)
     def handle_user(self, client_socket, args):
         self.current_user = args[0] if args else None
         client_socket.send(b"331 Usuario OK, esperando contrasena\r\n")
