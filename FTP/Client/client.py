@@ -6,8 +6,9 @@ from typing import Optional, Dict, Callable
 from FTP.Common.constants import FTPResponseCode, TransferMode, DEFAULT_BUFFER_SIZE, DEFAULT_TIMEOUT
 from FTP.Common.exceptions import FTPClientError, FTPTransferError, FTPAuthError, FTPConnectionError
 from FTP.Common.utils import (validate_transfer_type, validate_transfer_mode, 
-                            validate_structure, parse_allocation_size, 
-                            parse_restart_marker)
+                            validate_structure, parse_allocation_size, validate_port_args,
+                            parse_restart_marker, validate_path,
+                            parse_features_response, parse_list_response)
 
 class FTPClient:
     """Cliente FTP con soporte para modos activo/pasivo y dispatcher de comandos."""
@@ -33,15 +34,6 @@ class FTPClient:
             "DELE": self.delete_file,
             "RNFR": self.rename_from,
             "RNTO": self.rename_to,
-            "QUIT": self.quit
-        }
-        self.structure = 'F'  # Default structure
-        self.transfer_type = 'A'  # Default ASCII
-        self.transfer_mode = 'S'  # Default Stream
-        self.restart_point = None
-        
-        # Agregar nuevos comandos al dispatcher
-        self.command_dispatcher.update({
             "TYPE": self.set_type,
             "MODE": self.set_mode,
             "STRU": self.set_structure,
@@ -56,7 +48,12 @@ class FTPClient:
             "NOOP": self.noop,
             "ABOR": self.abort,
             "CDUP": self.change_to_parent_dir,
-        })
+            "QUIT": self.quit
+        }
+        self.structure = 'F'  # Default structure
+        self.transfer_type = 'A'  # Default ASCII
+        self.transfer_mode = 'S'  # Default Stream
+        self.restart_point = None
 
     def connect(self) -> str:
         """Establece conexión inicial con el servidor."""
@@ -108,7 +105,10 @@ class FTPClient:
         """Cambia de directorio (CWD)"""
         if not validate_path(path):
             raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Ruta inválida")
-        return self.send_command("CWD", path)
+        response = self.send_command("CWD", path)
+        if self._parse_code(response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+            raise FTPClientError(self._parse_code(response), "Error cambiando de directorio")
+        return response
 
     def make_dir(self, path: str) -> str:
         """Crea un directorio (MKD)"""
@@ -157,7 +157,7 @@ class FTPClient:
 
     def download_file(self, remote_path: str, local_path: str = None) -> str:
         """Descarga un archivo usando RETR."""
-        if not validate_file_name(remote_path):
+        if remote_path and not validate_path(remote_path):
             raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Nombre de archivo inválido")
         # Si no se especifica el archivo local, se utiliza el mismo nombre
         if local_path is None:
@@ -188,6 +188,8 @@ class FTPClient:
 
     def upload_file(self, local_path: str, remote_path: str) -> str:
         """Sube un archivo usando STOR."""
+        if (local_path and not validate_path(local_path)) or (remote_path and not validate_path(remote_path)):
+            FTPClientError(500, "Error en STOR .Proporcione rutas válidas")
         self._setup_data_connection()
 
         # Si hay punto de reinicio, enviarlo
@@ -218,7 +220,9 @@ class FTPClient:
     def enter_active_mode(self, host: str, port: int) -> str:
         """Activa modo PORT con validación."""
         port_args, port = validate_port_args(host, port)
-        return self.send_command("PORT", port_args)
+        response = self.send_command("PORT", port_args)
+        self.mode = TransferMode.ACTIVE
+        return response
 
     def quit(self) -> str:
         """Cierra la conexión."""
@@ -362,6 +366,8 @@ class FTPClient:
 
     def store_unique(self, local_path: str) -> str:
         """Almacena un archivo con nombre único."""
+        if local_path and not validate_path(local_path):
+            FTPClientError(500, f"Error en STOU. Ruta inválida {local_path}")
         self._setup_data_connection()
         response = self.send_command("STOU")
         if self._parse_code(response) not in (125, 150):

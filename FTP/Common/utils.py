@@ -39,7 +39,7 @@ def parse_restart_marker(marker: str) -> Optional[int]:
 
 def validate_path(path: str) -> bool:
     """Valida que una ruta sea segura y no contenga caracteres peligrosos."""
-    forbidden_chars = ['..', '/', '\\', '*', '?', '"', '<', '>', '|']
+    forbidden_chars = ['..', '/', '\\', '*', '?', '"', '<', '>', '|', ':']
     return not any(char in path for char in forbidden_chars)
 
 def parse_list_response(response: str) -> list[dict]:
@@ -60,13 +60,6 @@ def parse_list_response(response: str) -> list[dict]:
                 'name': parts[8]
             })
     return entries
-
-def validate_file_name(filename: str) -> bool:
-    """Valida que un nombre de archivo sea válido."""
-    forbidden_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
-    return (filename and 
-            not any(char in filename for char in forbidden_chars) and
-            len(filename) <= 255)
 
 def parse_mlsd_response(response: str) -> list[dict]:
     """Parsea la respuesta del comando MLSD (listado en formato máquina)."""
