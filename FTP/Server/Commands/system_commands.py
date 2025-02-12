@@ -46,9 +46,6 @@ class StatCommand(Command):
     def execute(self, server, client_socket, args):
         """Muestra información detallada del estado del servidor"""
         try:
-            import platform
-            from datetime import datetime
-
             response = "211-Server status:\r\n"
             # Información de conexión
             response += f"    Connected from: {client_socket.getpeername()[0]}:{client_socket.getpeername()[1]}\r\n"
