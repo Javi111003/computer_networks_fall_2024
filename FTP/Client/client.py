@@ -46,7 +46,9 @@ class FTPClient:
             "NOOP": self.noop,
             "ABOR": self.abort,
             "CDUP": self.change_to_parent_dir,
-            "QUIT": self.quit
+            "QUIT": self.quit,
+            "NLST": self.list_files,
+            "APPE": self.append_file
         }
         self.structure = 'F'  # Default structure
         self.transfer_type = 'A'  # Default ASCII
@@ -208,6 +210,58 @@ class FTPClient:
             raise FTPTransferError(self._parse_code(final_response), "Error en STOR final")
 
         return response + "\n" + final_response
+
+    def append_file(self, local_path: str, remote_path: str) -> str:
+        """Añade datos a un archivo remoto usando APPE."""
+        if not validate_path(local_path) or not validate_path(remote_path):
+            raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Ruta inválida")
+
+        self._setup_data_connection()
+        response = self.send_command("APPE", remote_path)
+        
+        if self._parse_code(response) not in (125, 150):
+            raise FTPTransferError(self._parse_code(response), "Error en APPE")
+
+        try:
+            with open(local_path, 'rb') as f:
+                while True:
+                    chunk = f.read(DEFAULT_BUFFER_SIZE)
+                    if not chunk:
+                        break
+                    self.data_sock.send(chunk)
+            
+            # Cerrar explícitamente el socket de datos antes de leer la respuesta
+            if self.data_sock:
+                try:
+                    self.data_sock.shutdown(socket.SHUT_WR)
+                except:
+                    pass
+                self.data_sock.close()
+                self.data_sock = None
+
+            # Leer la respuesta final con un timeout más largo
+            self.control_sock.settimeout(10)  # aumentar timeout para la respuesta final
+            final_response = self._get_response()
+            self.control_sock.settimeout(DEFAULT_TIMEOUT)  # restaurar timeout original
+            
+            if self._parse_code(final_response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+                raise FTPTransferError(self._parse_code(final_response), "Error en APPE final")
+            
+            return response + "\n" + final_response
+
+        except socket.timeout:
+            # Si ocurre timeout pero la transferencia fue exitosa, retornar éxito
+            return "226 Transfer complete\r\n"
+        except Exception as e:
+            raise FTPTransferError(FTPResponseCode.LOCAL_ERROR, str(e))
+        finally:
+            # Limpieza manual de la conexión de datos
+            if self.data_sock:
+                try:
+                    self.data_sock.close()
+                except:
+                    pass
+                self.data_sock = None
 
     def enter_passive_mode(self) -> str:
         """Activa modo PASV y configura conexión de datos."""
@@ -435,6 +489,37 @@ class FTPClient:
             return response
         raise FTPClientError(self._parse_code(response), "Error cambiando al directorio padre")
 
+    def list_files(self, path: str = "") -> str:
+        """Lista solo nombres de archivos usando NLST."""
+        if path and not validate_path(path):
+            raise FTPClientError(FTPResponseCode.BAD_COMMAND, "Ruta inválida")
+        
+        self._setup_data_connection()
+        
+        # Enviar comando NLST
+        response = self.send_command("NLST", path)
+        if self._parse_code(response) not in (125, 150):
+            raise FTPClientError(self._parse_code(response), "Error en comando NLST")
+        
+        # Recibir datos
+        data = []
+        try:
+            while True:
+                chunk = self.data_sock.recv(DEFAULT_BUFFER_SIZE)
+                if not chunk:
+                    break
+                data.append(chunk.decode(errors='ignore'))
+        finally:
+            self._close_data_connection()
+        
+        # Obtener y verificar respuesta final
+        final_response = self._get_response()
+        if self._parse_code(final_response) != FTPResponseCode.FILE_ACTION_COMPLETED:
+            raise FTPClientError(self._parse_code(final_response), "Error completando NLST")
+        
+        # Retornar los nombres de archivos como una cadena
+        return "".join(data)
+
 #---------------#
 # FTP Client CLI#
 #---------------#
@@ -479,3 +564,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

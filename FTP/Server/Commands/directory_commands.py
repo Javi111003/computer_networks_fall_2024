@@ -45,12 +45,41 @@ class RmdCommand(FileSystemCommand):
             return "501 Syntax error\r\n"
         try:
             dir_to_remove = self.resolve_path(server, args[0])
-            if dir_to_remove.is_dir():
-                dir_to_remove.rmdir()
-                return "250 Directory removed\r\n"
-            return "550 Not a directory\r\n"
-        except:
-            return "550 Error removing directory\r\n"
+            
+            # Verificar que existe y es un directorio
+            if not dir_to_remove.exists():
+                return "550 Directory does not exist\r\n"
+            if not dir_to_remove.is_dir():
+                return "550 Not a directory\r\n"
+                
+            # Verificar que está dentro del directorio base
+            try:
+                dir_to_remove.relative_to(server.base_dir)
+            except ValueError:
+                return "550 Cannot remove directory outside base path\r\n"
+            
+            try:
+                # Eliminar recursivamente todo el contenido
+                self._remove_recursive(dir_to_remove)
+                return "250 Directory and contents removed\r\n"
+            except PermissionError:
+                return "550 Permission denied\r\n"
+            except Exception as e:
+                print(f"Error eliminando directorio: {e}")  # Para debugging
+                return f"550 Error removing directory: {str(e)}\r\n"
+                    
+        except Exception as e:
+            print(f"Error en RMD: {e}")  # Para debugging
+            return f"550 Error: {str(e)}\r\n"
+
+    def _remove_recursive(self, path):
+        """Elimina un directorio y todo su contenido recursivamente"""
+        for item in path.iterdir():
+            if item.is_dir():
+                self._remove_recursive(item)
+            else:
+                item.unlink()  # Eliminar archivo
+        path.rmdir()  # Eliminar el directorio vacío
 
 class DeleCommand(FileSystemCommand):
     def execute(self, server, client_socket, args):
@@ -126,11 +155,23 @@ class NlstCommand(FileSystemCommand):
         try:
             path = self.resolve_path(server, args[0]) if args else server.current_dir
             client_socket.send(b"150 Opening data connection for NLST\r\n")
-            files = "\r\n".join(str(f.name) for f in path.iterdir() if f.is_file())
-            server.data_socket.send(files.encode() + b"\r\n")
-            server.data_socket.close()
+            
+            # Solo enviar nombres de archivos, uno por línea
+            file_names = []
+            for item in path.iterdir():
+                if server.transfer_type == 'A':
+                    # Para modo ASCII, usar CRLF
+                    file_names.append(f"{item.name}\r\n")
+                else:
+                    # Para modo binario, usar LF
+                    file_names.append(f"{item.name}\n")
+            
+            data = "".join(file_names)
+            server.data_socket.send(data.encode())
             return "226 Transfer complete\r\n"
-        except:
+            
+        except Exception as e:
+            print(f"Error en NLST: {e}")  # Para debugging
             return "550 Error listing files\r\n"
         finally:
             if server.data_socket:

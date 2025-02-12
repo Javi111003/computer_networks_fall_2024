@@ -248,18 +248,24 @@ class FTPCLI(cmd.Cmd):
                 self.console.print(f"[red]Error: El archivo local '{local_path}' no existe[/red]")
                 return
 
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                transient=True
-            ) as progress:
-                task = progress.add_task("[cyan]Añadiendo datos...", total=None)
+            # Mostrar progreso de la operación
+            self.console.print("[cyan]Iniciando operación de append...[/cyan]")
+            
+            try:
                 response = self.client.append_file(local_path, remote_path)
                 
-            if "226" in response:
-                self.console.print(f"[green]✓ Datos añadidos exitosamente a '{remote_path}'[/green]")
-            else:
-                self.console.print(f"[yellow]{response}[/yellow]")
+                # Verificar si la operación fue exitosa
+                if "226" in response:  # Código de éxito
+                    self.console.print(f"[green]✓ Datos añadidos exitosamente a '{remote_path}'[/green]")
+                else:
+                    self.console.print(f"[yellow]{response}[/yellow]")
+
+            except Exception as e:
+                if "timeout" in str(e).lower():
+                    self.console.print("[red]✗ Error: Timeout en la operación[/red]")
+                    self.console.print("[yellow]La operación se completó parcialmente[/yellow]")
+                else:
+                    self.console.print(f"[red]✗ Error: {str(e)}[/red]")
 
         except Exception as e:
             self.console.print(f"[red]✗ Error: {str(e)}[/red]")
@@ -297,7 +303,7 @@ class FTPCLI(cmd.Cmd):
                 "retr": "Descargar archivo: retr <remote_path> <local_path>",
                 "stor": "Subir archivo: stor <local_path> <remote_path>",
                 "pasv": "Entrar en modo pasivo",
-                "type": "Tipo de transferencia: type <A|E|I>",
+                "type": "Tipo de transferencia: type <A|I>",
                 "mode": "Modo de transferencia: mode <S|B|C>",
                 "stru": "Estructura de archivo: stru <F|R|P>",
                 "rest": "Establecer punto de reinicio: rest <marker>"
@@ -318,7 +324,6 @@ class FTPCLI(cmd.Cmd):
             },
             "EXTRAS": {
                 "site": "Ejecutar comando específico del sitio: SITE <comando> [args]",
-                "opts": "Configurar opciones: OPTS <comando> <opciones>",
                 "appe": "Añadir datos a archivo: APPE <local_path> <remote_path>",
                 "abor": "Abortar operación actual",
                 "rein": "Reinicializar conexión",
@@ -559,20 +564,7 @@ class FTPCLI(cmd.Cmd):
             self.console.print(f"[cyan]{response}[/cyan]")
         except Exception as e:
             self.console.print(f"[red]Error: {e}[/red]")
-
-    def do_opts(self, arg):
-        """Configura opciones específicas: OPTS <comando> <opciones>"""
-        args = arg.split()
-        if len(args) < 2:
-            self.console.print("[red]Error: Uso: OPTS <comando> <opciones>[/red]")
-            return
-        try:
-            cmd, *options = args
-            response = self.client.set_options(cmd, *options)
-            self.console.print(f"[cyan]{response}[/cyan]")
-        except Exception as e:
-            self.console.print(f"[red]Error: {e}[/red]")
-
+            
     def do_appe(self, arg):
         """Añade datos a un archivo: APPE <local_path> <remote_path>"""
         args = arg.split()
@@ -583,11 +575,6 @@ class FTPCLI(cmd.Cmd):
 
         local_path, remote_path = args
         try:
-            # Verificar archivo local
-            from pathlib import Path
-            if not Path(local_path).exists():
-                self.console.print(f"[red]Error: El archivo local '{local_path}' no existe[/red]")
-                return
 
             with Progress(
                 SpinnerColumn(),
@@ -625,18 +612,32 @@ class FTPCLI(cmd.Cmd):
     def do_nlst(self, arg):
         """Lista solo nombres de archivos: NLST [path]"""
         try:
-            response = self.client.list_files(arg)
-            # Crear tabla para mostrar los resultados
-            table = Table(show_header=True, header_style="bold magenta")
-            table.add_column("Archivos", style="cyan")
+            # Asegurar que estamos en modo pasivo
+            self.client.enter_passive_mode()
             
-            for file in response.split('\n'):
-                if file.strip():
-                    table.add_row(file.strip())
-                    
+            # Obtener la lista de archivos
+            file_list = self.client.list_files(arg).splitlines()
+            
+            if not file_list:
+                self.console.print("[yellow]Directorio vacío o error listando archivos[/yellow]")
+                return
+            
+            # Crear una tabla para mostrar los resultados
+            table = Table(show_header=True, header_style="bold magenta", title="Nombres de Archivos")
+            table.add_column("Nombre", style="cyan")
+            
+            # Añadir cada archivo a la tabla
+            for filename in file_list:
+                if filename.strip():  # Ignorar líneas vacías
+                    table.add_row(filename.strip())
+            
+            # Mostrar la tabla y el total
             self.console.print(table)
+            self.console.print(f"[blue]Total: {len(file_list)} elementos[/blue]\n")
+            
         except Exception as e:
-            self.console.print(f"[red]Error: {e}[/red]")
+            self.console.print(f"[red]Error: {str(e)}[/red]")
+            self.console.print("[yellow]Tip: Verifique que tiene permisos y la ruta es válida[/yellow]")
 
     def do_stou(self, arg):
         """Almacena archivo con nombre único: STOU <local_path>"""

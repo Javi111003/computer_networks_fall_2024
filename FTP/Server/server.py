@@ -12,7 +12,7 @@ from FTP.Server.Commands.system_commands import (SystCommand, StatCommand, NoopC
                                              HelpCommand, QuitCommand, TypeCommand,
                                              ModeCommand, StruCommand, FeatCommand,
                                              RestCommand,
-                                             ReinCommand, AbortCommand, OptsCommand, SiteCommand)
+                                             ReinCommand, AbortCommand, SiteCommand)
 from FTP.Server.Commands.connection_commands import PasvCommand, PortCommand
 from FTP.Server.Commands.base_command import Command
 
@@ -89,7 +89,6 @@ class FTPServer:
             "REST": RestCommand(),
             "REIN": ReinCommand(),
             "ABOR": AbortCommand(),
-            "OPTS": OptsCommand(),
             "SITE": SiteCommand(),
         }
         self.commands.update(commands)

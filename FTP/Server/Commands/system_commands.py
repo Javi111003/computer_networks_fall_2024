@@ -44,11 +44,40 @@ class SystCommand(Command):
 
 class StatCommand(Command):
     def execute(self, server, client_socket, args):
-        response = "211-Server status:\r\n"
-        response += f"    Connected as: {server.current_user}\r\n"
-        response += f"    Current directory: {server.current_dir}\r\n"
-        response += "211 End of status\r\n"
-        return response
+        """Muestra información detallada del estado del servidor"""
+        try:
+            import platform
+            from datetime import datetime
+
+            response = "211-Server status:\r\n"
+            # Información de conexión
+            response += f"    Connected from: {client_socket.getpeername()[0]}:{client_socket.getpeername()[1]}\r\n"
+            response += f"    Server address: {server.host}:{server.port}\r\n"
+            response += f"    Current user: {server.current_user}\r\n"
+            
+            # Información del sistema de archivos
+            response += f"    Current directory: {server.current_dir}\r\n"
+            response += f"    Base directory: {server.base_dir}\r\n"
+            
+            # Información de transferencia
+            response += f"    Transfer type: {server.transfer_type}\r\n"
+            response += f"    Structure: {server.structure}\r\n"
+            response += f"    Mode: {server.mode}\r\n"
+            response += f"    Passive mode: {'Yes' if server.passive_mode else 'No'}\r\n"
+            return response
+            
+        except ImportError:
+            # Versión simplificada si psutil no está disponible
+            response = "211-Server status:\r\n"
+            response += f"    Connected from: {client_socket.getpeername()[0]}:{client_socket.getpeername()[1]}\r\n"
+            response += f"    Server address: {server.host}:{server.port}\r\n"
+            response += f"    Current user: {server.current_user}\r\n"
+            response += f"    Current directory: {server.current_dir}\r\n"
+            response += f"    Transfer type: {server.transfer_type}\r\n"
+            response += "211 End of status\r\n"
+            return response
+        except Exception as e:
+            return f"500 Error getting server status: {str(e)}\r\n"
 
 class NoopCommand(Command):
     def execute(self, server, client_socket, args):
@@ -66,9 +95,9 @@ class QuitCommand(Command):
 class TypeCommand(Command):
     def execute(self, server, client_socket, args):
         if not args:
-            return "501 Syntax: TYPE {A,E,I,L}\r\n"
+            return "501 Syntax: TYPE {A,E,I}\r\n"
         type_code = args[0].upper()
-        if type_code in ['A', 'E', 'I', 'L']:
+        if type_code in ['A', 'E', 'I']:
             server.transfer_type = type_code
             return f"200 Type set to {type_code}\r\n"
         return "504 Type not supported\r\n"
@@ -92,25 +121,6 @@ class StruCommand(Command):
             server.structure = structure
             return "200 Structure set to File\r\n"
         return "504 Structure not supported\r\n"
-
-class OptsCommand(Command):
-    def execute(self, server, client_socket, args):
-        """Maneja opciones específicas para comandos"""
-        if not args or len(args) < 2:
-            return "501 Syntax error in parameters\r\n"
-        
-        command = args[0].upper()
-        options = args[1:]
-        
-        # Manejar opciones específicas por comando
-        if command == "UTF8":
-            if "ON" in options or "on" in options:
-                return "200 UTF8 set to on\r\n"
-            return "200 UTF8 set to off\r\n"
-        elif command == "MLST":
-            return "200 MLST OPTS modified\r\n"
-        
-        return "501 Option not supported\r\n"
 
 class SiteCommand(Command):
     def execute(self, server, client_socket, args):
