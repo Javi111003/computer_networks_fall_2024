@@ -1,5 +1,4 @@
 import socket
-import os
 from pathlib import Path
 from typing import Dict, Optional
 from FTP.Server.Commands.auth import UserCommand, PassCommand
@@ -12,9 +11,11 @@ from FTP.Server.Commands.system_commands import (SystCommand, StatCommand, NoopC
                                              HelpCommand, QuitCommand, TypeCommand,
                                              ModeCommand, StruCommand, FeatCommand,
                                              RestCommand,
-                                             ReinCommand, AbortCommand, SiteCommand)
+                                             ReinCommand, AbortCommand)
 from FTP.Server.Commands.connection_commands import PasvCommand, PortCommand
 from FTP.Server.Commands.base_command import Command
+from FTP.Server.Auth.CredentialsManager import CredentialsManager
+from FTP.Server.Commands.site_commands import SiteCommand
 
 class FTPServer:
     def __init__(self, host='0.0.0.0', port=21, base_dir=None):
@@ -31,7 +32,9 @@ class FTPServer:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.current_dir = self.base_dir
         self.current_user: Optional[str] = None
+        self.authenticated = False
         self.commands: Dict[str, Command] = {}
+        self.credentials_manager = CredentialsManager()
         self._register_commands()
 
         # Estado de la conexión de datos
@@ -124,10 +127,15 @@ class FTPServer:
                     cmd = cmd_parts[0].upper()
                     args = cmd_parts[1:] if len(cmd_parts) > 1 else []
 
+                    if cmd not in ("USER","PASS") and not self.authenticated:
+                        print("Cliente no autenticado")
+                        client_socket.send(b"530 No autenticado\r\n")
+
                     if cmd in self.commands:
                         command = self.commands[cmd]
                         response = command.execute(self, client_socket, args)
                         if response:
+                            print(f"Respuesta: {response}")
                             client_socket.send(response.encode())
 
                         if cmd == "QUIT":

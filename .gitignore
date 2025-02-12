@@ -40,3 +40,5 @@ coverage.xml
 # Carpeta de descargas FTP
 Downloads/
 FTP/Downloads/
+FTP/Server/Auth/credentials.enc
+FTP/Server/Auth/secret.key

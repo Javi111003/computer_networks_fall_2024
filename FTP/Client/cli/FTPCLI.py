@@ -694,8 +694,8 @@ if __name__ == "__main__":
             progress.add_task(description="Conectando al servidor...", total=None)
             try:
                 client.connect()
-                client.execute("USER", "username")
-                client.execute("PASS", "password")
+                # client.execute("USER", "username")
+                # client.execute("PASS", "password")
                 rprint("[green]✓ Conexión establecida[/green]")
             except Exception as e:
                 rprint(f"[red]Connection error: {e}[/red]")

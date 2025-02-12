@@ -15,5 +15,9 @@ class PassCommand(Command):
             client_socket.send(b"503 Login with USER first\r\n")
             return
 
-        # Aquí iría la lógica real de autenticación
-        client_socket.send(b"230 User logged in\r\n")
+        password = args[0]
+        if server.credentials_manager.verify_user(server.current_user, password):
+            server.authenticated = True
+            client_socket.send(b"230 User logged in\r\n")
+        else:
+            client_socket.send(b"530 Login incorrect\r\n")

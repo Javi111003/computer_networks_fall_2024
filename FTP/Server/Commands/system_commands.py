@@ -24,6 +24,7 @@ class ReinCommand(Command):
     def execute(self, server, client_socket, args):
         """Reinicializa la conexión"""
         server.current_user = None
+        server.authenticated = False
         server.current_dir = server.base_dir
         return "220 Service ready for new user\r\n"
 
@@ -51,18 +52,18 @@ class StatCommand(Command):
             response += f"    Connected from: {client_socket.getpeername()[0]}:{client_socket.getpeername()[1]}\r\n"
             response += f"    Server address: {server.host}:{server.port}\r\n"
             response += f"    Current user: {server.current_user}\r\n"
-            
+
             # Información del sistema de archivos
             response += f"    Current directory: {server.current_dir}\r\n"
             response += f"    Base directory: {server.base_dir}\r\n"
-            
+
             # Información de transferencia
             response += f"    Transfer type: {server.transfer_type}\r\n"
             response += f"    Structure: {server.structure}\r\n"
             response += f"    Mode: {server.mode}\r\n"
             response += f"    Passive mode: {'Yes' if server.passive_mode else 'No'}\r\n"
             return response
-            
+
         except ImportError:
             # Versión simplificada si psutil no está disponible
             response = "211-Server status:\r\n"
