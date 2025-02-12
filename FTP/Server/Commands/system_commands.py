@@ -66,9 +66,9 @@ class QuitCommand(Command):
 class TypeCommand(Command):
     def execute(self, server, client_socket, args):
         if not args:
-            return "501 Syntax: TYPE {A,E,I,L}\r\n"
+            return "501 Syntax: TYPE {A,E,I}\r\n"
         type_code = args[0].upper()
-        if type_code in ['A', 'E', 'I', 'L']:
+        if type_code in ['A', 'E', 'I']:
             server.transfer_type = type_code
             return f"200 Type set to {type_code}\r\n"
         return "504 Type not supported\r\n"
